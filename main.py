@@ -108,8 +108,12 @@ def show_axis(input_img, P, thickness=20):
                            )
 
 
-def subtract_background_and_get_frames(filename):
+def subtract_background_and_get_frames(filename, P = None):
     video = opencv.VideoCapture(filename)
+
+    out_video = opencv.VideoWriter("output.avi",
+                                   opencv.VideoWriter_fourcc('X', 'V', 'I', 'D'), 30.0,
+                                   (640, 480))
 
     while not video.isOpened():
         video = opencv.VideoCapture(filename)
@@ -130,17 +134,16 @@ def subtract_background_and_get_frames(filename):
     frames = []
     rects = []
 
-    P = None
     summation_P = np.zeros((3, 4))
 
     while True:
         ret, frame = video.read()
 
         if frame is not None:
-            P = find_marker_in_frame(frame, P)
+            #P = find_marker_in_frame(frame, P)
 
-            if P is not None:
-                summation_P = summation_P + P
+            #if P is not None:
+            #    summation_P = summation_P + P
 
             foreground_mask = subtractor.apply(frame)
 
@@ -160,23 +163,25 @@ def subtract_background_and_get_frames(filename):
                         frame_contours.append(np.array([x, y, w, h]))
                         opencv.rectangle(frame, (x, y), (x + w, y + h), color=(255, 0, 0))
                         head, foot = draw_head_and_foot(frame, np.array([x, y, w, h]), c)
-                        foot3d = estimate_foot(foot, summation_P/(len(frames)+1), frame)
-                        head3d = estimate_head(head, summation_P/(len(frames)+1), frame, foot3d)
+                        foot3d = estimate_foot(foot, P, frame)
+                        head3d = estimate_head(head, P, frame, foot3d)
                         height = np.linalg.norm(head3d - foot3d)
-                        ft_inch = str(int(height)//12) + ' ft ' + str(int(height) % 12) + ' inch'
+                        ft_inch = str(int(height) // 12) + ' ft ' + str(int(height) % 12) + ' inch'
                         opencv.rectangle(frame,
-                                         (int(head[0]), int(head[1])-40),
-                                         (int(head[0])+100, int(head[1])),
+                                         (int(head[0]), int(head[1]) - 20),
+                                         (int(head[0]) + 100, int(head[1])),
                                          (255, 255, 255), -1)
                         opencv.putText(frame, ft_inch,
-                                       (int(head[0]), int(head[1])-20),
+                                       (int(head[0]), int(head[1]) - 5),
                                        opencv.FONT_HERSHEY_SIMPLEX,
-                                       0.5, (0, 0, 0), 2)
+                                       0.5, (0, 0, 0), 1)
             if P is not None:
-                show_axis(frame, summation_P / (len(frames)+1), thickness=2)
+                show_axis(frame, P, thickness=2)
 
             opencv.rectangle(frame, (0, 0), (60, 20), (255, 255, 255), -1)
             opencv.putText(frame, str(len(frames)), (5, 15), opencv.FONT_HERSHEY_SIMPLEX, 0.5, color=(0, 0, 0))
+
+            out_video.write(frame)
 
             opencv.imshow('video', frame)
             opencv.waitKey(20)
@@ -190,6 +195,7 @@ def subtract_background_and_get_frames(filename):
     print("Background subtraction complete.")
 
     video.release()
+    out_video.release()
 
     opencv.destroyAllWindows()
 
@@ -295,5 +301,58 @@ def estimate_head(head, projection_matrix, frame, foot3d):
     return head_org
 
 
+def get_marker_corners_from_video(filename):
+    video = opencv.VideoCapture(filename)
+
+    while not video.isOpened():
+        video = opencv.VideoCapture(filename)
+
+        if opencv.waitKey(1000) == 'q':
+            break
+
+        print("Attempting again.")
+
+    marker_dictionary = opencv.aruco.getPredefinedDictionary(opencv.aruco.DICT_7X7_1000)
+
+    points3d = np.array([[-MARKER_SIZE / 2, MARKER_SIZE / 2],
+                         [MARKER_SIZE / 2, MARKER_SIZE / 2],
+                         [MARKER_SIZE / 2, -MARKER_SIZE / 2],
+                         [-MARKER_SIZE / 2, -MARKER_SIZE / 2]])
+
+    summation_corners = np.zeros((4, 2))
+    counter = 0
+
+    print("Estimating marker corners")
+    while True:
+        ret, frame = video.read()
+
+        if frame is not None:
+            corners, ids, rejected_img_points = opencv.aruco.detectMarkers(frame, marker_dictionary)
+
+            if len(corners) is not 0:
+                summation_corners += corners[0][0]
+                counter += 1
+        else:
+            break
+
+    video.release()
+
+    opencv.destroyAllWindows()
+
+    corners = summation_corners / counter
+
+    print("Marker corners estimated")
+
+    return corners, points3d
+
+
 if __name__ == '__main__':
-    frames, rects, projection_matrix = subtract_background_and_get_frames('resources/engg_m3.webm')
+    filename = 'resources/engg_m3.webm'
+
+    img_points, points_3d = get_marker_corners_from_video(filename)
+
+    R, t = get_extrinsic(img_points, points_3d)
+
+    P = get_projection_matrix(R, t)
+
+    frames, rects, projection_matrix = subtract_background_and_get_frames(filename, P)
