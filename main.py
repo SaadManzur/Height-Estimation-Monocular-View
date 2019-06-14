@@ -139,6 +139,9 @@ def subtract_background_and_get_frames(filename):
         if frame is not None:
             P = find_marker_in_frame(frame, P)
 
+            if P is not None:
+                summation_P = summation_P + P
+
             foreground_mask = subtractor.apply(frame)
 
             foreground_mask = opencv.morphologyEx(foreground_mask, opencv.MORPH_OPEN, np.ones((3, 3), np.uint8))
@@ -153,20 +156,30 @@ def subtract_background_and_get_frames(filename):
                 if 600 < area:
                     x, y, w, h = opencv.boundingRect(c)
 
-                    if h > 1.5*w:
+                    if h > 1.5 * w:
                         frame_contours.append(np.array([x, y, w, h]))
                         opencv.rectangle(frame, (x, y), (x + w, y + h), color=(255, 0, 0))
-                        draw_head_and_foot(frame, np.array([x, y, w, h]), c)
-
+                        head, foot = draw_head_and_foot(frame, np.array([x, y, w, h]), c)
+                        foot3d = estimate_foot(foot, summation_P/(len(frames)+1), frame)
+                        head3d = estimate_head(head, summation_P/(len(frames)+1), frame, foot3d)
+                        height = np.linalg.norm(head3d - foot3d)
+                        ft_inch = str(int(height)//12) + ' ft ' + str(int(height) % 12) + ' inch'
+                        opencv.rectangle(frame,
+                                         (int(head[0]), int(head[1])-40),
+                                         (int(head[0])+100, int(head[1])),
+                                         (255, 255, 255), -1)
+                        opencv.putText(frame, ft_inch,
+                                       (int(head[0]), int(head[1])-20),
+                                       opencv.FONT_HERSHEY_SIMPLEX,
+                                       0.5, (0, 0, 0), 2)
             if P is not None:
-                summation_P = summation_P + P
-                show_axis(frame, summation_P / len(frames), thickness=2)
+                show_axis(frame, summation_P / (len(frames)+1), thickness=2)
 
             opencv.rectangle(frame, (0, 0), (60, 20), (255, 255, 255), -1)
             opencv.putText(frame, str(len(frames)), (5, 15), opencv.FONT_HERSHEY_SIMPLEX, 0.5, color=(0, 0, 0))
 
             opencv.imshow('video', frame)
-            opencv.waitKey(30)
+            opencv.waitKey(20)
 
             frames.append(frame)
             rects.append(frame_contours)
@@ -200,14 +213,16 @@ def draw_line_through(img, p_, q_, color, rect):
     p = list(p_)
     q = list(q_)
 
-    m = (q[0] - p[0])/(q[1] - p[1])
+    m = (q[0] - p[0]) / (q[1] - p[1])
 
     pt1 = (int(m * (rect[1] - p[1]) + p[0]), rect[1])
-    pt2 = (int(m * (rect[1] + rect[3] - p[1]) + p[0]), rect[1]+rect[3])
+    pt2 = (int(m * (rect[1] + rect[3] - p[1]) + p[0]), rect[1] + rect[3])
 
     opencv.circle(img, pt1, 3, color, -1)
     opencv.circle(img, pt2, 3, color, -1)
     opencv.line(img, pt1, pt2, color, 1)
+
+    return pt1, pt2
 
 
 def draw_head_and_foot(frame, rect, contour):
@@ -218,7 +233,66 @@ def draw_head_and_foot(frame, rect, contour):
     p1 = (center[0] + 0.02 * eigen_vectors[0, 0] * eigen_values[0, 0],
           center[1] + 0.02 * eigen_vectors[0, 1] * eigen_values[0, 0])
 
-    draw_line_through(frame, center, p1, (0, 0, 255), rect)
+    head, foot = draw_line_through(frame, center, p1, (0, 0, 255), rect)
+
+    return head, foot
+
+
+def estimate_foot(foot, projection_matrix, frame):
+    P = projection_matrix[:, :3]
+    p = projection_matrix[:, 3]
+
+    inv_P = np.linalg.inv(P)
+
+    C = - inv_P @ p
+
+    z = np.zeros((1, 3))
+    z[0, 2] = 1
+
+    foot_h = np.array([np.array([foot[0], foot[1], 1])]).T
+
+    l = - (z @ C[:, np.newaxis]) / (z @ inv_P @ foot_h)
+
+    foot_org = C[:, np.newaxis] + l * (inv_P @ foot_h)
+
+    projected_foot = projection_matrix @ np.vstack((foot_org, np.ones((1, 1))))
+    projected_foot /= projected_foot[2, 0]
+
+    opencv.circle(frame, (int(projected_foot[0, 0]), int(projected_foot[1, 0])),
+                  4, (0, 0, 0), 2)
+
+    return foot_org
+
+
+def estimate_head(head, projection_matrix, frame, foot3d):
+    P = projection_matrix[:, :3]
+    p = projection_matrix[:, 3]
+
+    inv_P = np.linalg.inv(P)
+
+    C = - inv_P @ p
+
+    Dv = np.zeros((1, 3))
+    Dv[0, 2] = 1
+
+    head_h = np.array([np.array([head[0], head[1], 1])]).T
+
+    Dh = inv_P @ head_h
+
+    B = foot3d - C[:, np.newaxis]
+    A = np.hstack((Dh, -Dv.T))
+
+    result = np.linalg.lstsq(A, B, rcond=None)[0]
+
+    head_org = C[:, np.newaxis] + result[0] * Dh
+
+    projected_head = projection_matrix @ np.vstack((head_org, np.ones((1, 1))))
+    projected_head /= projected_head[2, 0]
+
+    opencv.circle(frame, (int(projected_head[0, 0]), int(projected_head[1, 0])),
+                  4, (0, 0, 0), 2)
+
+    return head_org
 
 
 if __name__ == '__main__':
