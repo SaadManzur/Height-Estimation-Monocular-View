@@ -1,10 +1,13 @@
+"""
+Tested with Python 3.7 and OpenCV 4.1.0
+"""
+
 import cv2 as opencv
 import numpy as np
-from math import atan2, cos, sin, sqrt, pi
 
 MARKER_SIZE = 19.6
 
-# Logitech C920
+# Logitech C920, computed from calibration code separately
 K = np.array([[662.25801378, 0., 294.92509514],
               [0., 663.05010424, 209.48385376],
               [0., 0., 1.]])
@@ -134,6 +137,8 @@ def subtract_background_and_get_frames(filename, P = None):
     frames = []
     rects = []
 
+    FRAME_SKIP = 200
+
     summation_P = np.zeros((3, 4))
 
     while True:
@@ -153,6 +158,9 @@ def subtract_background_and_get_frames(filename, P = None):
             contours, ret = opencv.findContours(foreground_mask, mode=opencv.CHAIN_APPROX_SIMPLE,
                                                 method=opencv.RETR_FLOODFILL)
 
+            if len(frames) % FRAME_SKIP == 0:
+                opencv.imwrite('resources/frames/fg' + str(len(frames)) + '.jpg', foreground_mask)
+
             frame_contours = []
             for c in contours:
                 area = opencv.contourArea(c)
@@ -163,6 +171,10 @@ def subtract_background_and_get_frames(filename, P = None):
                         frame_contours.append(np.array([x, y, w, h]))
                         opencv.rectangle(frame, (x, y), (x + w, y + h), color=(255, 0, 0))
                         head, foot = draw_head_and_foot(frame, np.array([x, y, w, h]), c)
+
+                        if len(frames) % FRAME_SKIP == 0:
+                            opencv.imwrite('resources/frames/hf' + str(len(frames)) + '.jpg', frame)
+
                         foot3d = estimate_foot(foot, P, frame)
                         head3d = estimate_head(head, P, frame, foot3d)
                         height = np.linalg.norm(head3d - foot3d)
@@ -175,15 +187,21 @@ def subtract_background_and_get_frames(filename, P = None):
                                        (int(head[0]), int(head[1]) - 5),
                                        opencv.FONT_HERSHEY_SIMPLEX,
                                        0.5, (0, 0, 0), 1)
+
             if P is not None:
                 show_axis(frame, P, thickness=2)
 
             opencv.rectangle(frame, (0, 0), (60, 20), (255, 255, 255), -1)
             opencv.putText(frame, str(len(frames)), (5, 15), opencv.FONT_HERSHEY_SIMPLEX, 0.5, color=(0, 0, 0))
 
-            out_video.write(frame)
+            #draw_xy_plane(frame, P)
 
-            opencv.imshow('video', frame)
+            if len(frames) % FRAME_SKIP == 0:
+                opencv.imwrite('resources/frames/final' + str(len(frames)) + '.jpg', frame)
+
+            out_video.write(foreground_mask)
+
+            opencv.imshow('video', foreground_mask)
             opencv.waitKey(20)
 
             frames.append(frame)
@@ -346,8 +364,17 @@ def get_marker_corners_from_video(filename):
     return corners, points3d
 
 
+def draw_xy_plane(frame, projection_matrix):
+    pts3d = np.array([[0, 20, 20, 0], [0, 0, 20, 20], [0, 0, 0, 0], [1, 1, 1, 1]])
+    pts2d = projection_matrix @ pts3d
+
+    pts2d /= pts2d[2, :]
+
+    opencv.polylines(frame, [pts2d.astype(np.int32)[1:3, :].T], 1, (255, 0, 0), 2)
+
+
 if __name__ == '__main__':
-    filename = 'resources/engg_m3.webm'
+    filename = 'resources/ghost2.webm'
 
     img_points, points_3d = get_marker_corners_from_video(filename)
 
